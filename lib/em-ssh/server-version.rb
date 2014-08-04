@@ -15,11 +15,26 @@ module EventMachine
       private
 
       def negotiate!(connection)
-        @version = ''
+        @header = ''
         cb = connection.on(:data) do |data|
           log.debug("#{self.class}.on(:data, #{data.inspect})")
-          @version << data
-          @header = @version.clone
+          data = StringIO.new(data)
+          loop do
+            @version = ""
+            loop do
+              begin
+                b = data.read(1)
+                raise Net::SSH::Disconnect, "connection closed by remote host" if b.nil?
+              rescue EOFError
+                raise Net::SSH::Disconnect, "connection closed by remote host"
+              end
+              @version << b
+              break if b == "\n"
+            end
+            @header << @version
+            break if @version.match(/^SSH-/)
+          end
+
           if @version[-1] == "\n"
             @version.chomp!
             log.debug("server version: #{@version}")
@@ -30,6 +45,8 @@ module EventMachine
               connection.send_data("#{Net::SSH::Transport::ServerVersion::PROTO_VERSION}\r\n")
               cb.cancel
               connection.fire(:version_negotiated)
+              connection.receive_data(data.read) unless data.eof?
+              data.close
             end
           end # @header[-1] == "\n"
         end #  |data|
